@@ -715,7 +715,6 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
             let currentFrame = window.frame
             let currentLayout = window.contentLayoutRect.size
 
-            let deltaW = currentFrame.size.width - currentLayout.width
             let deltaH = currentFrame.size.height - currentLayout.height
 
             guard currentLayout.width > 0 else { return }

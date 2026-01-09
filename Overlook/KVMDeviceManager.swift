@@ -4,7 +4,7 @@ import Combine
 import CryptoKit
 
 @MainActor
-class KVMDeviceManager: ObservableObject {
+final class KVMDeviceManager: NSObject, ObservableObject {
     @Published var availableDevices: [KVMDevice] = []
     @Published var connectedDevice: KVMDevice?
     @Published var glkvmClient: GLKVMClient?
@@ -55,7 +55,8 @@ class KVMDeviceManager: ObservableObject {
         let capabilities: Set<KVMCapability>
     }
     
-    init() {
+    override init() {
+        super.init()
         setupNetworkMonitoring()
         loadPersistedDevices()
     }
@@ -402,15 +403,19 @@ class KVMDeviceManager: ObservableObject {
             return false
         }
 
+        final class Flag {
+            var value: Bool = false
+        }
+
         let queue = DispatchQueue(label: "com.overlook.probe.port")
         let connection = NWConnection(host: NWEndpoint.Host(host), port: endpointPort, using: .tcp)
 
         return await withCheckedContinuation { continuation in
-            var finished = false
+            let finished = Flag()
 
             let timeoutWorkItem = DispatchWorkItem {
-                if finished { return }
-                finished = true
+                if finished.value { return }
+                finished.value = true
                 connection.stateUpdateHandler = nil
                 connection.cancel()
                 continuation.resume(returning: false)
@@ -421,15 +426,15 @@ class KVMDeviceManager: ObservableObject {
             connection.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
-                    if finished { return }
-                    finished = true
+                    if finished.value { return }
+                    finished.value = true
                     timeoutWorkItem.cancel()
                     connection.stateUpdateHandler = nil
                     connection.cancel()
                     continuation.resume(returning: true)
                 case .failed, .cancelled:
-                    if finished { return }
-                    finished = true
+                    if finished.value { return }
+                    finished.value = true
                     timeoutWorkItem.cancel()
                     connection.stateUpdateHandler = nil
                     connection.cancel()
@@ -739,15 +744,19 @@ class KVMDeviceManager: ObservableObject {
             return false
         }
 
+        final class Flag {
+            var value: Bool = false
+        }
+
         let queue = DispatchQueue(label: "com.overlook.validate")
         let connection = NWConnection(host: NWEndpoint.Host(device.host), port: port, using: .tcp)
 
         return await withCheckedContinuation { continuation in
-            var finished = false
+            let finished = Flag()
 
             let timeoutWorkItem = DispatchWorkItem {
-                if finished { return }
-                finished = true
+                if finished.value { return }
+                finished.value = true
                 connection.stateUpdateHandler = nil
                 connection.cancel()
                 continuation.resume(returning: false)
@@ -758,15 +767,15 @@ class KVMDeviceManager: ObservableObject {
             connection.stateUpdateHandler = { (state: NWConnection.State) in
                 switch state {
                 case .ready:
-                    if finished { return }
-                    finished = true
+                    if finished.value { return }
+                    finished.value = true
                     timeoutWorkItem.cancel()
                     connection.stateUpdateHandler = nil
                     connection.cancel()
                     continuation.resume(returning: true)
                 case .failed, .cancelled:
-                    if finished { return }
-                    finished = true
+                    if finished.value { return }
+                    finished.value = true
                     timeoutWorkItem.cancel()
                     connection.stateUpdateHandler = nil
                     connection.cancel()

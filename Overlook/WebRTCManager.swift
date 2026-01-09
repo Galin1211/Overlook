@@ -3,7 +3,7 @@ import Foundation
 import CoreVideo
 #endif
 #if canImport(WebRTC)
-import WebRTC
+@preconcurrency import WebRTC
 #endif
 #if canImport(AVFoundation)
 import AVFoundation
@@ -100,7 +100,7 @@ class WebRTCManager: NSObject, ObservableObject {
     private var fpsFrameCount: Int = 0
     private var lastFpsPublishTime: CFTimeInterval = 0
 
-    private let streamHealthLock = NSLock()
+    private let streamHealthQueue = DispatchQueue(label: "com.overlook.stream-health")
     private var lastVideoFrameTime: CFTimeInterval?
     private var connectedIceTime: CFTimeInterval?
     private var streamHealthTimer: Timer?
@@ -123,6 +123,18 @@ class WebRTCManager: NSObject, ObservableObject {
     override init() {
         super.init()
         setupWebRTC()
+    }
+
+    private func setLastVideoFrameTime(_ time: CFTimeInterval?) {
+        streamHealthQueue.sync {
+            lastVideoFrameTime = time
+        }
+    }
+
+    private func getLastVideoFrameTime() -> CFTimeInterval? {
+        streamHealthQueue.sync {
+            lastVideoFrameTime
+        }
     }
     
     private func setupWebRTC() {
@@ -148,9 +160,7 @@ class WebRTCManager: NSObject, ObservableObject {
         isStreamStalled = false
         lastDisconnectReason = nil
         lastVideoFrameAgeSeconds = nil
-        streamHealthLock.lock()
-        lastVideoFrameTime = nil
-        streamHealthLock.unlock()
+        setLastVideoFrameTime(nil)
         connectedIceTime = nil
         hasEverConnectedToStream = false
 
@@ -472,7 +482,7 @@ class WebRTCManager: NSObject, ObservableObject {
                 sdpMLineIndex = 0
             }
             let iceCandidate = RTCIceCandidate(sdp: candidateString, sdpMLineIndex: sdpMLineIndex, sdpMid: sdpMid)
-            peerConnection.add(iceCandidate) { _ in }
+            try? await peerConnection.add(iceCandidate)
             return
         }
 
@@ -496,13 +506,10 @@ class WebRTCManager: NSObject, ObservableObject {
             sdp: sdpString
         )
         
-        await withCheckedContinuation { continuation in
-            peerConnection.setRemoteDescription(sessionDescription) { error in
-                if let error = error {
-                    print("Failed to set remote description: \(error)")
-                }
-                continuation.resume()
-            }
+        do {
+            try await peerConnection.setRemoteDescription(sessionDescription)
+        } catch {
+            print("Failed to set remote description: \(error)")
         }
         
         // Create and send answer
@@ -511,30 +518,15 @@ class WebRTCManager: NSObject, ObservableObject {
     
     private func createAndSendAnswer() async {
         guard let peerConnection = peerConnection else { return }
-        
-        await withCheckedContinuation { continuation in
-            peerConnection.answer(for: RTCMediaConstraints(
-                mandatoryConstraints: nil,
-                optionalConstraints: nil
-            )) { sessionDescription, error in
-                if let error = error {
-                    print("Failed to create answer: \(error)")
-                    continuation.resume()
-                    return
-                }
-                
-                guard let sessionDescription = sessionDescription else {
-                    continuation.resume()
-                    return
-                }
-                
-                peerConnection.setLocalDescription(sessionDescription) { error in
-                    if let error = error {
-                        print("Failed to set local description: \(error)")
-                    }
-                    continuation.resume()
-                }
-            }
+
+        do {
+            let sessionDescription = try await peerConnection.answer(
+                for: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
+            )
+            try await peerConnection.setLocalDescription(sessionDescription)
+        } catch {
+            print("Failed to create/send answer: \(error)")
+            return
         }
         
         // Send answer to Janus
@@ -575,54 +567,46 @@ class WebRTCManager: NSObject, ObservableObject {
         streamHealthTimer?.invalidate()
         streamHealthTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self else { return }
+            Task { @MainActor in
+                let now = CACurrentMediaTime()
 
-            let now = CACurrentMediaTime()
-
-            if self.isConnected == false {
-                self.isStreamStalled = false
-                self.lastVideoFrameAgeSeconds = nil
-                return
-            }
-
-            let lastFrame: CFTimeInterval?
-            self.streamHealthLock.lock()
-            lastFrame = self.lastVideoFrameTime
-            self.streamHealthLock.unlock()
-
-            let age: CFTimeInterval?
-            if let lastFrame {
-                age = now - lastFrame
-            } else {
-                age = nil
-            }
-
-            if let age {
-                self.lastVideoFrameAgeSeconds = max(0, Int(age.rounded()))
-            } else {
-                self.lastVideoFrameAgeSeconds = nil
-            }
-
-            if let age, age > self.streamStallThresholdSeconds {
-                if self.isStreamStalled == false {
-                    self.isStreamStalled = true
-                    self.lastDisconnectReason = "Video stream stalled"
+                if self.isConnected == false {
+                    self.isStreamStalled = false
+                    self.lastVideoFrameAgeSeconds = nil
+                    return
                 }
-                return
-            }
 
-            if self.lastVideoFrameTime == nil,
-               let connectedAt = self.connectedIceTime,
-               now - connectedAt > self.initialFrameTimeoutSeconds {
-                if self.isStreamStalled == false {
-                    self.isStreamStalled = true
-                    self.lastDisconnectReason = "Video stream stalled"
+                let lastFrame = self.getLastVideoFrameTime()
+                let age = lastFrame.map { now - $0 }
+
+                if let age {
+                    self.lastVideoFrameAgeSeconds = max(0, Int(age.rounded()))
+                } else {
+                    self.lastVideoFrameAgeSeconds = nil
                 }
-                return
-            }
 
-            if self.isStreamStalled {
-                self.isStreamStalled = false
-                self.lastDisconnectReason = nil
+                if let age, age > self.streamStallThresholdSeconds {
+                    if self.isStreamStalled == false {
+                        self.isStreamStalled = true
+                        self.lastDisconnectReason = "Video stream stalled"
+                    }
+                    return
+                }
+
+                if lastFrame == nil,
+                   let connectedAt = self.connectedIceTime,
+                   now - connectedAt > self.initialFrameTimeoutSeconds {
+                    if self.isStreamStalled == false {
+                        self.isStreamStalled = true
+                        self.lastDisconnectReason = "Video stream stalled"
+                    }
+                    return
+                }
+
+                if self.isStreamStalled {
+                    self.isStreamStalled = false
+                    self.lastDisconnectReason = nil
+                }
             }
         }
     }
@@ -643,131 +627,130 @@ class WebRTCManager: NSObject, ObservableObject {
         let lastBytes = lastInboundVideoBytesReceived
         let lastTs = lastInboundVideoBytesTimestamp
 
-        peerConnection.statistics { report in
-            func numberValue(_ any: Any?) -> NSNumber? {
-                any as? NSNumber
+        let report = await peerConnection.statistics()
+        func numberValue(_ any: Any?) -> NSNumber? {
+            any as? NSNumber
+        }
+
+        var bytesReceived: Int64?
+        var jitterSeconds: Double?
+        var jitterBufferDelaySeconds: Double?
+        var jitterBufferEmittedCount: Double?
+        var totalDecodeTimeSeconds: Double?
+        var framesDecoded: Double?
+        var packetsLost: Int?
+
+        var currentRoundTripTimeSeconds: Double?
+
+        for statistic in report.statistics.values {
+            if statistic.type == "candidate-pair" {
+                let selected = (statistic.values["selected"] as? Bool)
+                    ?? (numberValue(statistic.values["selected"])?.boolValue)
+                    ?? false
+                guard selected else { continue }
+
+                if let rtt = numberValue(statistic.values["currentRoundTripTime"])?.doubleValue {
+                    currentRoundTripTimeSeconds = rtt
+                }
+                continue
             }
 
-            var bytesReceived: Int64?
-            var jitterSeconds: Double?
-            var jitterBufferDelaySeconds: Double?
-            var jitterBufferEmittedCount: Double?
-            var totalDecodeTimeSeconds: Double?
-            var framesDecoded: Double?
-            var packetsLost: Int?
+            guard statistic.type == "inbound-rtp" else { continue }
 
-            var currentRoundTripTimeSeconds: Double?
+            if let kind = statistic.values["kind"] as? String, kind != "video" { continue }
+            if let mediaType = statistic.values["mediaType"] as? String, mediaType != "video" { continue }
 
-            for statistic in report.statistics.values {
-                if statistic.type == "candidate-pair" {
-                    let selected = (statistic.values["selected"] as? Bool)
-                        ?? (numberValue(statistic.values["selected"])?.boolValue)
-                        ?? false
-                    guard selected else { continue }
-
-                    if let rtt = numberValue(statistic.values["currentRoundTripTime"])?.doubleValue {
-                        currentRoundTripTimeSeconds = rtt
-                    }
-                    continue
-                }
-
-                guard statistic.type == "inbound-rtp" else { continue }
-
-                if let kind = statistic.values["kind"] as? String, kind != "video" { continue }
-                if let mediaType = statistic.values["mediaType"] as? String, mediaType != "video" { continue }
-
-                if let n = numberValue(statistic.values["bytesReceived"]) {
-                    bytesReceived = n.int64Value
-                }
-                if let n = numberValue(statistic.values["jitter"]) {
-                    jitterSeconds = n.doubleValue
-                }
-                if let n = numberValue(statistic.values["jitterBufferDelay"]) {
-                    jitterBufferDelaySeconds = n.doubleValue
-                }
-                if let n = numberValue(statistic.values["jitterBufferEmittedCount"]) {
-                    jitterBufferEmittedCount = n.doubleValue
-                }
-                if let n = numberValue(statistic.values["totalDecodeTime"]) {
-                    totalDecodeTimeSeconds = n.doubleValue
-                }
-                if let n = numberValue(statistic.values["framesDecoded"]) {
-                    framesDecoded = n.doubleValue
-                }
-                if let n = numberValue(statistic.values["packetsLost"]) {
-                    packetsLost = n.intValue
-                }
-
-                break
+            if let n = numberValue(statistic.values["bytesReceived"]) {
+                bytesReceived = n.int64Value
+            }
+            if let n = numberValue(statistic.values["jitter"]) {
+                jitterSeconds = n.doubleValue
+            }
+            if let n = numberValue(statistic.values["jitterBufferDelay"]) {
+                jitterBufferDelaySeconds = n.doubleValue
+            }
+            if let n = numberValue(statistic.values["jitterBufferEmittedCount"]) {
+                jitterBufferEmittedCount = n.doubleValue
+            }
+            if let n = numberValue(statistic.values["totalDecodeTime"]) {
+                totalDecodeTimeSeconds = n.doubleValue
+            }
+            if let n = numberValue(statistic.values["framesDecoded"]) {
+                framesDecoded = n.doubleValue
+            }
+            if let n = numberValue(statistic.values["packetsLost"]) {
+                packetsLost = n.intValue
             }
 
-            let now = Date().timeIntervalSince1970
+            break
+        }
 
-            guard let bytesReceived else {
-                Task { @MainActor in
-                    self.lastInboundVideoBytesReceived = nil
-                    self.lastInboundVideoBytesTimestamp = nil
-                    self.inboundVideoKbps = nil
-                    self.inboundVideoPlayoutDelayMs = nil
-                    self.inboundVideoJitterMs = nil
-                    self.inboundVideoDecodeMs = nil
-                    self.inboundVideoPacketsLost = nil
-                    self.iceCurrentRoundTripTimeMs = nil
-                }
-                return
-            }
+        let now = Date().timeIntervalSince1970
 
-            var kbps: Int?
-            if let lastBytes, let lastTs {
-                let dt = now - lastTs
-                let db = Double(bytesReceived - lastBytes)
-                if dt > 0, db >= 0 {
-                    kbps = Int((db * 8.0 / dt) / 1000.0)
-                }
+        guard let bytesReceived else {
+            await MainActor.run {
+                self.lastInboundVideoBytesReceived = nil
+                self.lastInboundVideoBytesTimestamp = nil
+                self.inboundVideoKbps = nil
+                self.inboundVideoPlayoutDelayMs = nil
+                self.inboundVideoJitterMs = nil
+                self.inboundVideoDecodeMs = nil
+                self.inboundVideoPacketsLost = nil
+                self.iceCurrentRoundTripTimeMs = nil
             }
+            return
+        }
 
-            let jitterMs: Int?
-            if let jitterSeconds {
-                jitterMs = Int((jitterSeconds * 1000.0).rounded())
-            } else {
-                jitterMs = nil
+        var kbps: Int?
+        if let lastBytes, let lastTs {
+            let dt = now - lastTs
+            let db = Double(bytesReceived - lastBytes)
+            if dt > 0, db >= 0 {
+                kbps = Int((db * 8.0 / dt) / 1000.0)
             }
+        }
 
-            let playoutDelayMs: Int?
-            if let jitterBufferDelaySeconds,
-               let jitterBufferEmittedCount,
-               jitterBufferEmittedCount > 0 {
-                playoutDelayMs = Int(((jitterBufferDelaySeconds / jitterBufferEmittedCount) * 1000.0).rounded())
-            } else {
-                playoutDelayMs = nil
-            }
+        let jitterMs: Int?
+        if let jitterSeconds {
+            jitterMs = Int((jitterSeconds * 1000.0).rounded())
+        } else {
+            jitterMs = nil
+        }
 
-            let decodeMs: Int?
-            if let totalDecodeTimeSeconds,
-               let framesDecoded,
-               framesDecoded > 0 {
-                decodeMs = Int(((totalDecodeTimeSeconds / framesDecoded) * 1000.0).rounded())
-            } else {
-                decodeMs = nil
-            }
+        let playoutDelayMs: Int?
+        if let jitterBufferDelaySeconds,
+           let jitterBufferEmittedCount,
+           jitterBufferEmittedCount > 0 {
+            playoutDelayMs = Int(((jitterBufferDelaySeconds / jitterBufferEmittedCount) * 1000.0).rounded())
+        } else {
+            playoutDelayMs = nil
+        }
 
-            let rttMs: Int?
-            if let currentRoundTripTimeSeconds {
-                rttMs = Int((currentRoundTripTimeSeconds * 1000.0).rounded())
-            } else {
-                rttMs = nil
-            }
+        let decodeMs: Int?
+        if let totalDecodeTimeSeconds,
+           let framesDecoded,
+           framesDecoded > 0 {
+            decodeMs = Int(((totalDecodeTimeSeconds / framesDecoded) * 1000.0).rounded())
+        } else {
+            decodeMs = nil
+        }
 
-            Task { @MainActor in
-                self.lastInboundVideoBytesReceived = bytesReceived
-                self.lastInboundVideoBytesTimestamp = now
-                self.inboundVideoKbps = kbps
-                self.inboundVideoPlayoutDelayMs = playoutDelayMs
-                self.inboundVideoJitterMs = jitterMs
-                self.inboundVideoDecodeMs = decodeMs
-                self.inboundVideoPacketsLost = packetsLost
-                self.iceCurrentRoundTripTimeMs = rttMs
-            }
+        let rttMs: Int?
+        if let currentRoundTripTimeSeconds {
+            rttMs = Int((currentRoundTripTimeSeconds * 1000.0).rounded())
+        } else {
+            rttMs = nil
+        }
+
+        await MainActor.run {
+            self.lastInboundVideoBytesReceived = bytesReceived
+            self.lastInboundVideoBytesTimestamp = now
+            self.inboundVideoKbps = kbps
+            self.inboundVideoPlayoutDelayMs = playoutDelayMs
+            self.inboundVideoJitterMs = jitterMs
+            self.inboundVideoDecodeMs = decodeMs
+            self.inboundVideoPacketsLost = packetsLost
+            self.iceCurrentRoundTripTimeMs = rttMs
         }
     }
     
@@ -832,9 +815,7 @@ class WebRTCManager: NSObject, ObservableObject {
         isStreamStalled = false
         lastDisconnectReason = nil
         lastVideoFrameAgeSeconds = nil
-        streamHealthLock.lock()
-        lastVideoFrameTime = nil
-        streamHealthLock.unlock()
+        setLastVideoFrameTime(nil)
         connectedIceTime = nil
         latency = 0
         videoSize = nil
@@ -1021,9 +1002,7 @@ extension WebRTCManager: @preconcurrency RTCVideoRenderer {
 
         let now = CACurrentMediaTime()
 
-        streamHealthLock.lock()
-        lastVideoFrameTime = now
-        streamHealthLock.unlock()
+        setLastVideoFrameTime(now)
 
         if fpsWindowStartTime == 0 {
             fpsWindowStartTime = now

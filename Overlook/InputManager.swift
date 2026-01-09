@@ -81,7 +81,7 @@ class InputManager: ObservableObject {
 
         let sendIntervalNs = Self.mouseMoveSendIntervalNs
 
-        mouseMoveSenderTask = Task.detached(priority: .userInteractive) { [weak self] in
+        mouseMoveSenderTask = Task.detached(priority: .userInitiated) { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
 
